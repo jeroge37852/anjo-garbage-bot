@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: anjo-garbage-bot
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn "app.main:app" --bind 0.0.0.0:$PORT
+    envVars:
+      - key: LINE_CHANNEL_SECRET
+        sync: false
+      - key: LINE_CHANNEL_ACCESS_TOKEN
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
