@@ -3,7 +3,7 @@
 
 処理の流れ:
 1. CSV検索で品目が見つかれば → そのまま分類を返す
-2. 見つからなければ → OpenAI APIに各分類の定義を渡して推測してもらう
+2. 見つからなければ → Input/gomi_bot_prompt.txt のプロンプトでOpenAI APIに問い合わせ
 """
 
 import os
@@ -20,34 +20,10 @@ client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 # アプリ起動時に一度だけCSVを読み込む（毎回読むと遅いため）
 ITEMS_TO_CATEGORY, CATEGORY_DEFINITIONS = load_garbage_data()
 
-# OpenAIに渡す「分類の定義」テキストを事前に作成しておく
-# 定義がない分類にはデフォルトの説明を補足する
-CATEGORY_SUPPLEMENT = {
-    '燃やせる':      '生ごみ、紙くず、布製品など、燃やして処理できるもの。',
-    '燃やせるごみ':  '生ごみ、紙くず、布製品など、燃やして処理できるもの。',
-    '燃やせない':    'ガラス、陶磁器、金属製品など、燃やせないもの。',
-    '危険ゴミ':      '電池（乾電池・ボタン電池・リチウムイオン電池）、充電式小型家電（スマートフォン・モバイルバッテリーなど1辺20cm以下）。',
-    '粗大ごみ':      'ゴミ袋に入らない大きな家具・家電・自転車など。',
-    '購入店・販売店へ': '車のバッテリー、タイヤなど、販売店に引き取ってもらうもの。',
-}
-
-
-def build_definitions_text() -> str:
-    """
-    OpenAIへ渡す「分類の定義一覧」テキストを作成する。
-    """
-    lines = []
-    # CSV内の定義
-    for category, definition in CATEGORY_DEFINITIONS.items():
-        lines.append(f'・{category}: {definition}')
-    # 補足定義（CSV定義がない分類）
-    for category, definition in CATEGORY_SUPPLEMENT.items():
-        if category not in CATEGORY_DEFINITIONS:
-            lines.append(f'・{category}: {definition}')
-    return '\n'.join(lines)
-
-
-DEFINITIONS_TEXT = build_definitions_text()
+# プロンプトテンプレートをファイルから読み込む（***が品目名のプレースホルダー）
+_prompt_path = os.path.join(os.path.dirname(__file__), '..', 'Input', 'gomi_bot_prompt.txt')
+with open(_prompt_path, encoding='utf-8') as f:
+    PROMPT_TEMPLATE = f.read()
 
 
 def ask_openai(item: str) -> str:
@@ -58,37 +34,16 @@ def ask_openai(item: str) -> str:
         item: ユーザーが入力した品目名
 
     戻り値:
-        推測した分類と理由を含むテキスト（str）
+        分類と捨て方を含むテキスト（str）
     """
-    # 分類名の一覧（OpenAIに選ばせる候補）
-    category_list = ', '.join(
-        list(CATEGORY_DEFINITIONS.keys()) + list(CATEGORY_SUPPLEMENT.keys())
-    )
-
-    prompt = f"""あなたは安城市のゴミ分別アシスタントです。
-以下の分類定義を参考にして、ユーザーが入力した品目がどの分類に当たるか答えてください。
-
-【分類の定義】
-{DEFINITIONS_TEXT}
-
-【分類の候補】
-{category_list}
-
-【ルール】
-- 必ず上記の分類候補の中から最も適切なものを1つ選んでください。
-- 回答は「分類: ○○」から始めてください。
-- 次の行に短い理由（1〜2文）を書いてください。
-- 判断が難しい場合は「燃やせる」を選んでください。
-
-ユーザーの入力: 「{item}」
-"""
+    prompt = PROMPT_TEMPLATE.replace('***', item)
 
     response = client.chat.completions.create(
-        model='gpt-4o-mini',   # 安くて十分な精度のモデル
+        model='gpt-4o-mini',
         messages=[
             {'role': 'user', 'content': prompt}
         ],
-        max_tokens=200,
+        max_tokens=600,
         temperature=0,  # 0にすると毎回同じ答えが返る（安定性重視）
     )
 
