@@ -11,7 +11,7 @@ import re
 from openai import OpenAI
 from dotenv import load_dotenv
 from app.data_loader import load_garbage_data, search_item
-from app.disposal_rules import DISPOSAL_RULES
+from app.disposal_rules import DISPOSAL_RULES, get_item_note
 
 # .envファイルからAPIキーを読み込む
 load_dotenv()
@@ -36,10 +36,16 @@ def _format_response(item: str, category: str) -> str:
 
     if rule:
         msg += f'\n【捨て方】{rule["捨て方"]}'
+        # カテゴリ共通の注意事項
         if rule.get('注意事項'):
             msg += f'\n【注意事項】{rule["注意事項"]}'
     else:
         msg += '\n詳しい捨て方は安城市のウェブサイトをご確認ください。'
+
+    # 品目固有の注意事項（追加で存在する場合のみ）
+    item_note = get_item_note(item)
+    if item_note:
+        msg += f'\n【この品目の注意】{item_note}'
 
     return msg
 
