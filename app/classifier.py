@@ -2,8 +2,9 @@
 ゴミ分類を判定するモジュール。
 
 処理の流れ:
-1. CSV検索で品目が見つかれば → 分類＋ルールベースの捨て方を返す
-2. 見つからなければ → OpenAI APIで分類を推測 → ルールベースの捨て方を付加して返す
+1. 素材キーワードが含まれる場合 → OpenAI APIで分類を推測（CSV検索をスキップ）
+2. CSV検索で品目が見つかれば → 分類＋ルールベースの捨て方を返す
+3. 見つからなければ → OpenAI APIで分類を推測 → ルールベースの捨て方を付加して返す
 """
 
 import os
@@ -26,6 +27,21 @@ ITEMS_TO_CATEGORY, CATEGORY_DEFINITIONS = load_garbage_data()
 _prompt_path = os.path.join(os.path.dirname(__file__), '..', 'Input', 'gomi_bot_prompt.txt')
 with open(_prompt_path, encoding='utf-8') as f:
     PROMPT_TEMPLATE = f.read()
+
+# 素材を表すキーワード。これらが入力に含まれる場合はCSVをスキップしてOpenAIに委ねる
+_MATERIAL_KEYWORDS = [
+    '金属', '鉄', 'アルミ', 'ステンレス', '銅', '真鍮',
+    '木', '木製', '木材', '竹', '竹製',
+    'プラスチック', '樹脂', 'ナイロン', 'ポリ',
+    'ガラス', '陶器', '陶磁器', '磁器',
+    '布', '綿', '革', 'レザー', 'ゴム',
+    '紙', '段ボール',
+]
+
+
+def _has_material_keyword(text: str) -> bool:
+    """入力テキストに素材を表すキーワードが含まれるか判定する。"""
+    return any(kw in text for kw in _MATERIAL_KEYWORDS)
 
 
 def _format_response(item: str, category: str) -> str:
@@ -115,13 +131,19 @@ def classify(item: str) -> str:
     戻り値:
         LINEに返すメッセージ文字列
     """
-    # ① CSV検索
+    # ① 素材キーワードが含まれる場合はCSVをスキップしてOpenAIに委ねる
+    #    例: "金属製のスプーン" → CSVの「スプーン＝プラスチック」を無視してAIが判定
+    if _has_material_keyword(item):
+        ai_response = ask_openai(item)
+        return _parse_ai_response(item, ai_response)
+
+    # ② CSV検索
     category = search_item(item, ITEMS_TO_CATEGORY)
 
     if category:
         return _format_response(item, category)
     else:
-        # ② OpenAI にフォールバック
+        # ③ OpenAI にフォールバック
         ai_response = ask_openai(item)
         return _parse_ai_response(item, ai_response)
 
