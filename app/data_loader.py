@@ -76,7 +76,7 @@ def load_garbage_data():
     return items_to_category, category_definitions
 
 
-def search_item(query: str, items_to_category: dict) -> str | None:
+def search_item(query: str, items_to_category: dict) -> tuple[str, str] | None:
     """
     ユーザーが入力した文字列をCSVの品目と照合する。
 
@@ -92,21 +92,21 @@ def search_item(query: str, items_to_category: dict) -> str | None:
     正規化により半角カナ・ひらがな・大小文字の表記ゆれにも対応する。
 
     引数:
-        query: ユーザーが入力した品目名（例: "ペットボトル"）
+        query: ユーザーが入力した品目名（例: "ペットぽどる"）
         items_to_category: load_garbage_data()で取得した品目辞書
 
     戻り値:
-        見つかった場合: 分類名（str）
+        見つかった場合: (分類名, マッチしたCSV品目名) のタプル
         見つからない場合: None
     """
     nq = _normalize(query)
 
     # 1. 完全一致
     if query in items_to_category:
-        return items_to_category[query]
+        return items_to_category[query], query
     for item, category in items_to_category.items():
         if _normalize(item) == nq:
-            return category
+            return category, item
 
     # 2. 後方一致: 品目名の末尾がクエリと一致
     #    例: "飲料用のペットボトル" が "ペットボトル" で終わる → 優先
@@ -118,7 +118,7 @@ def search_item(query: str, items_to_category: dict) -> str | None:
     if suffix_matches:
         # 最も短い品目名（最も直接的）を返す
         suffix_matches.sort(key=lambda x: len(x[0]))
-        return suffix_matches[0][1]
+        return suffix_matches[0][1], suffix_matches[0][0]
 
     # 3. 前方一致: 品目名にクエリが含まれる
     #    マッチ率（クエリ長/品目名長）が高い順に選ぶ
@@ -129,7 +129,7 @@ def search_item(query: str, items_to_category: dict) -> str | None:
     ]
     if forward_matches:
         forward_matches.sort(key=lambda x: -x[0])
-        return forward_matches[0][2]
+        return forward_matches[0][2], forward_matches[0][1]
 
     # 4. 逆方向部分一致: クエリに品目名が含まれる
     #    例: "指定袋入りペットボトル" → "飲料用のペットボトル" の末尾が一致
@@ -141,7 +141,7 @@ def search_item(query: str, items_to_category: dict) -> str | None:
     ]
     if reverse_matches:
         reverse_matches.sort(key=lambda x: -x[0])
-        return reverse_matches[0][2]
+        return reverse_matches[0][2], reverse_matches[0][1]
 
     # 5. 共通末尾一致: クエリと品目名が同じ末尾を共有する
     #    例: "使用済みペットボトル" と "飲料用のペットボトル" は "ペットボトル" を共有
@@ -161,7 +161,7 @@ def search_item(query: str, items_to_category: dict) -> str | None:
     ]
     best_len, best_item, best_category = max(suffix_matches, key=lambda x: x[0])
     if best_len >= 3:
-        return best_category
+        return best_category, best_item
 
     return None  # 見つからなかった
 

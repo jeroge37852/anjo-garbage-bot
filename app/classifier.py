@@ -138,10 +138,11 @@ def classify(item: str) -> str:
         return _parse_ai_response(item, ai_response)
 
     # ② CSV検索
-    category = search_item(item, ITEMS_TO_CATEGORY)
+    result = search_item(item, ITEMS_TO_CATEGORY)
 
-    if category:
-        return _format_response(item, category)
+    if result:
+        category, matched_item = result
+        return _format_response(matched_item, category)
     else:
         # ③ OpenAI にフォールバック
         ai_response = ask_openai(item)
