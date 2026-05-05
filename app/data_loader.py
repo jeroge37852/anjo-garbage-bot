@@ -122,10 +122,11 @@ def search_item(query: str, items_to_category: dict) -> tuple[str, str] | None:
 
     # 3. 前方一致: 品目名にクエリが含まれる
     #    マッチ率（クエリ長/品目名長）が高い順に選ぶ
+    #    閾値0.5超のみ採用（例: 「油」→「廃油」0.5は除外、「電池」→「乾電池」0.67は通過）
     forward_matches = [
         (len(nq) / len(_normalize(item)), item, category)
         for item, category in items_to_category.items()
-        if nq in _normalize(item)
+        if nq in _normalize(item) and len(nq) / len(_normalize(item)) > 0.5
     ]
     if forward_matches:
         forward_matches.sort(key=lambda x: -x[0])
