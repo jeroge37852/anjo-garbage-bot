@@ -9,9 +9,10 @@
 
 import os
 import re
+from dataclasses import dataclass
 from openai import OpenAI
 from dotenv import load_dotenv
-from app.data_loader import load_garbage_data, search_item
+from app.data_loader import load_garbage_data, search_item, get_candidates
 from app.disposal_rules import DISPOSAL_RULES, get_item_note
 
 # .envファイルからAPIキーを読み込む
@@ -29,6 +30,20 @@ with open(_prompt_path, encoding='utf-8') as f:
     PROMPT_TEMPLATE = f.read()
 
 # 素材を表すキーワード。これらが入力に含まれる場合はCSVをスキップしてOpenAIに委ねる
+@dataclass
+class CandidatesResult:
+    """CSV検索で複数の候補が見つかった場合の結果。"""
+    query: str
+    candidates: list[tuple[str, str]]  # [(品目名, 分類名), ...]
+
+    def format_message(self) -> str:
+        lines = [f'「{self.query}」に近い品目が複数あります。当てはまるものを番号で教えてください：']
+        for i, (item, category) in enumerate(self.candidates, 1):
+            lines.append(f'{i}. {item}（{category}）')
+        lines.append(f'{len(self.candidates) + 1}. 上記以外・わからない')
+        return '\n'.join(lines)
+
+
 _MATERIAL_KEYWORDS = [
     '金属', '鉄', 'アルミ', 'ステンレス', '銅', '真鍮',
     '木', '木製', '木材', '竹', '竹製',
@@ -120,33 +135,59 @@ def _parse_ai_response(item: str, ai_response: str) -> str:
     )
 
 
-def classify(item: str) -> str:
+def classify_selection(result: CandidatesResult, choice: int) -> str:
     """
-    品目名を受け取り、分類結果のメッセージを返す。
-    LINE Botのメッセージとして直接使える形式にする。
+    候補リストからユーザーが選んだ番号を処理して返信メッセージを返す。
+
+    引数:
+        result: CandidatesResult（候補リストと元クエリ）
+        choice: ユーザーが入力した番号（1始まり）
+
+    戻り値:
+        LINEに返すメッセージ文字列
+    """
+    if 1 <= choice <= len(result.candidates):
+        item, category = result.candidates[choice - 1]
+        return _format_response(item, category)
+    if choice == len(result.candidates) + 1:
+        ai_response = ask_openai(result.query)
+        return _parse_ai_response(result.query, ai_response)
+    return f'1〜{len(result.candidates) + 1}の番号で選んでください。'
+
+
+def classify(item: str) -> str | CandidatesResult:
+    """
+    品目名を受け取り、分類結果のメッセージまたは候補リストを返す。
 
     引数:
         item: ユーザーが入力した品目名（例: "ペットボトル"）
 
     戻り値:
-        LINEに返すメッセージ文字列
+        str: 分類が確定した場合のLINE返信メッセージ
+        CandidatesResult: 候補が複数ある場合（main.pyでセッション管理）
     """
     # ① 素材キーワードが含まれる場合はCSVをスキップしてOpenAIに委ねる
-    #    例: "金属製のスプーン" → CSVの「スプーン＝プラスチック」を無視してAIが判定
     if _has_material_keyword(item):
         ai_response = ask_openai(item)
         return _parse_ai_response(item, ai_response)
 
-    # ② CSV検索
+    # ② CSV完全一致・高確信度一致
     result = search_item(item, ITEMS_TO_CATEGORY)
-
     if result:
         category, matched_item = result
         return _format_response(matched_item, category)
-    else:
-        # ③ OpenAI にフォールバック
-        ai_response = ask_openai(item)
-        return _parse_ai_response(item, ai_response)
+
+    # ③ 部分一致候補を収集
+    candidates = get_candidates(item, ITEMS_TO_CATEGORY)
+    if len(candidates) >= 2:
+        return CandidatesResult(query=item, candidates=candidates)
+    if len(candidates) == 1:
+        matched_item, category = candidates[0]
+        return _format_response(matched_item, category)
+
+    # ④ OpenAI にフォールバック
+    ai_response = ask_openai(item)
+    return _parse_ai_response(item, ai_response)
 
 
 # --- 動作確認用 ---

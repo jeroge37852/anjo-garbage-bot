@@ -20,7 +20,7 @@ from linebot.v3.messaging import (
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
 from dotenv import load_dotenv
 
-from app.classifier import classify
+from app.classifier import classify, classify_selection, CandidatesResult
 
 # .env を読み込む
 load_dotenv()
@@ -33,6 +33,9 @@ handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
 # LINE Messaging API クライアント
 configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
+
+# ユーザーごとの候補選択セッション（再起動でリセットされる）
+_pending: dict[str, CandidatesResult] = {}
 
 
 @app.route('/', methods=['GET'])
@@ -64,8 +67,21 @@ def handle_text_message(event: MessageEvent):
     if not user_text:
         return
 
-    # ゴミ分類を判定してメッセージを生成
-    reply_text = classify(user_text)
+    user_id = event.source.user_id
+
+    # 候補選択中のユーザーが番号を送ってきた場合
+    if user_id in _pending and user_text.isdigit():
+        pending = _pending.pop(user_id)
+        reply_text = classify_selection(pending, int(user_text))
+    else:
+        # 番号以外の入力は新しいクエリとして処理（pending があればクリア）
+        _pending.pop(user_id, None)
+        result = classify(user_text)
+        if isinstance(result, CandidatesResult):
+            _pending[user_id] = result
+            reply_text = result.format_message()
+        else:
+            reply_text = result
 
     # LINE に返信
     with ApiClient(configuration) as api_client:
