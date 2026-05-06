@@ -110,10 +110,11 @@ def search_item(query: str, items_to_category: dict) -> tuple[str, str] | None:
 
     # 2. 後方一致: 品目名の末尾がクエリと一致
     #    例: "飲料用のペットボトル" が "ペットボトル" で終わる → 優先
+    #    マッチ率（クエリ長/品目名長）が0.5超のみ採用（例: 「油」→「廃油」0.5は除外）
     suffix_matches = [
         (item, category)
         for item, category in items_to_category.items()
-        if _normalize(item).endswith(nq)
+        if _normalize(item).endswith(nq) and len(nq) / len(_normalize(item)) > 0.5
     ]
     if suffix_matches:
         # 最も短い品目名（最も直接的）を返す
