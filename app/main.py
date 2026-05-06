@@ -87,13 +87,16 @@ def handle_text_message(event: MessageEvent):
 
     user_id = event.source.user_id
 
-    # 候補選択中のユーザーが番号を送ってきた場合
-    if user_id in _pending and user_text.isdigit():
-        pending = _pending.pop(user_id)
-        reply_message = TextMessage(text=classify_selection(pending, int(user_text)))
+    if user_id in _pending:
+        pending = _pending[user_id]
+        if user_text.isdigit() and 1 <= int(user_text) <= len(pending.candidates) + 1:
+            # 有効な番号 → 選択を処理してセッション終了
+            _pending.pop(user_id)
+            reply_message = TextMessage(text=classify_selection(pending, int(user_text)))
+        else:
+            # 番号以外 → ボタンを再表示してセッション維持
+            reply_message = _build_candidates_message(pending)
     else:
-        # 番号以外の入力は新しいクエリとして処理（pending があればクリア）
-        _pending.pop(user_id, None)
         result = classify(user_text)
         if isinstance(result, CandidatesResult):
             _pending[user_id] = result
