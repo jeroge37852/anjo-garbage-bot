@@ -16,6 +16,9 @@ from linebot.v3.messaging import (
     MessagingApi,
     ReplyMessageRequest,
     TextMessage,
+    QuickReply,
+    QuickReplyItem,
+    MessageAction,
 )
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
 from dotenv import load_dotenv
@@ -36,6 +39,21 @@ configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
 
 # ユーザーごとの候補選択セッション（再起動でリセットされる）
 _pending: dict[str, CandidatesResult] = {}
+
+
+def _build_candidates_message(result: CandidatesResult) -> TextMessage:
+    """候補リストをQuick Replyボタン付きメッセージとして組み立てる。"""
+    items = []
+    for i, (item, _category) in enumerate(result.candidates, 1):
+        label = item if len(item) <= 20 else item[:19] + '…'
+        items.append(QuickReplyItem(action=MessageAction(label=label, text=str(i))))
+    last = len(result.candidates) + 1
+    items.append(QuickReplyItem(action=MessageAction(label='その他・わからない', text=str(last))))
+
+    return TextMessage(
+        text=f'「{result.query}」に近い品目が複数あります。当てはまるものを選んでください：',
+        quick_reply=QuickReply(items=items),
+    )
 
 
 @app.route('/', methods=['GET'])
@@ -72,16 +90,16 @@ def handle_text_message(event: MessageEvent):
     # 候補選択中のユーザーが番号を送ってきた場合
     if user_id in _pending and user_text.isdigit():
         pending = _pending.pop(user_id)
-        reply_text = classify_selection(pending, int(user_text))
+        reply_message = TextMessage(text=classify_selection(pending, int(user_text)))
     else:
         # 番号以外の入力は新しいクエリとして処理（pending があればクリア）
         _pending.pop(user_id, None)
         result = classify(user_text)
         if isinstance(result, CandidatesResult):
             _pending[user_id] = result
-            reply_text = result.format_message()
+            reply_message = _build_candidates_message(result)
         else:
-            reply_text = result
+            reply_message = TextMessage(text=result)
 
     # LINE に返信
     with ApiClient(configuration) as api_client:
@@ -89,7 +107,7 @@ def handle_text_message(event: MessageEvent):
         line_bot_api.reply_message(
             ReplyMessageRequest(
                 reply_token=event.reply_token,
-                messages=[TextMessage(text=reply_text)],
+                messages=[reply_message],
             )
         )
 
