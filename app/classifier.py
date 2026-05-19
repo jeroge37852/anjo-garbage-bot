@@ -80,22 +80,52 @@ def _format_response(item: str, category: str) -> str:
     return msg
 
 
-def ask_openai(item: str) -> str:
-    """OpenAI APIにユーザーの品目を問い合わせ、回答をそのまま返す。"""
+@dataclass
+class AIConversationResult:
+    """OpenAIが質問を返してきた場合の結果。会話継続用。"""
+    response: str
+    messages: list[dict]
+
+
+def _call_openai(messages: list[dict]) -> str:
+    """OpenAI APIを呼び出してテキスト回答を返す。"""
     response = client.chat.completions.create(
         model='gpt-4o-mini',
-        messages=[
-            {'role': 'system', 'content': SYSTEM_PROMPT},
-            {'role': 'user', 'content': item},
-        ],
+        messages=messages,
         max_tokens=300,
         temperature=0,
     )
-
     return response.choices[0].message.content.strip()
 
 
-def classify_selection(result: CandidatesResult, choice: int) -> str:
+def _is_question(text: str) -> bool:
+    return '？' in text or '?' in text
+
+
+def ask_openai(item: str) -> str | AIConversationResult:
+    """OpenAI APIに品目を問い合わせる。質問が返ってきた場合はAIConversationResultを返す。"""
+    messages = [
+        {'role': 'system', 'content': SYSTEM_PROMPT},
+        {'role': 'user', 'content': item},
+    ]
+    response_text = _call_openai(messages)
+    if _is_question(response_text):
+        messages.append({'role': 'assistant', 'content': response_text})
+        return AIConversationResult(response=response_text, messages=messages)
+    return response_text
+
+
+def continue_ai_conversation(messages: list[dict], user_reply: str) -> str | AIConversationResult:
+    """進行中のAI会話にユーザーの返答を追加して続きを取得する。"""
+    messages = messages + [{'role': 'user', 'content': user_reply}]
+    response_text = _call_openai(messages)
+    if _is_question(response_text):
+        messages.append({'role': 'assistant', 'content': response_text})
+        return AIConversationResult(response=response_text, messages=messages)
+    return response_text
+
+
+def classify_selection(result: CandidatesResult, choice: int) -> str | AIConversationResult:
     """
     候補リストからユーザーが選んだ番号を処理して返信メッセージを返す。
 
@@ -114,7 +144,7 @@ def classify_selection(result: CandidatesResult, choice: int) -> str:
     return f'1〜{len(result.candidates) + 1}の番号で選んでください。'
 
 
-def classify(item: str) -> str | CandidatesResult:
+def classify(item: str) -> str | CandidatesResult | AIConversationResult:
     """
     品目名を受け取り、分類結果のメッセージまたは候補リストを返す。
 

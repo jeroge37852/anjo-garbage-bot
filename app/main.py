@@ -23,7 +23,7 @@ from linebot.v3.messaging import (
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
 from dotenv import load_dotenv
 
-from app.classifier import classify, classify_selection, CandidatesResult
+from app.classifier import classify, classify_selection, continue_ai_conversation, CandidatesResult, AIConversationResult
 
 # .env を読み込む
 load_dotenv()
@@ -39,6 +39,8 @@ configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
 
 # ユーザーごとの候補選択セッション（再起動でリセットされる）
 _pending: dict[str, CandidatesResult] = {}
+# ユーザーごとのOpenAI会話履歴（AIが質問を返した場合に保持）
+_ai_session: dict[str, list[dict]] = {}
 
 
 def _build_candidates_message(result: CandidatesResult) -> TextMessage:
@@ -87,12 +89,26 @@ def handle_text_message(event: MessageEvent):
 
     user_id = event.source.user_id
 
-    if user_id in _pending:
+    if user_id in _ai_session:
+        # OpenAIとの会話が進行中 → 続きを取得
+        messages = _ai_session.pop(user_id)
+        result = continue_ai_conversation(messages, user_text)
+        if isinstance(result, AIConversationResult):
+            _ai_session[user_id] = result.messages
+            reply_message = TextMessage(text=result.response)
+        else:
+            reply_message = TextMessage(text=result)
+    elif user_id in _pending:
         pending = _pending[user_id]
         if user_text.isdigit() and 1 <= int(user_text) <= len(pending.candidates) + 1:
             # 有効な番号 → 選択を処理してセッション終了
             _pending.pop(user_id)
-            reply_message = TextMessage(text=classify_selection(pending, int(user_text)))
+            result = classify_selection(pending, int(user_text))
+            if isinstance(result, AIConversationResult):
+                _ai_session[user_id] = result.messages
+                reply_message = TextMessage(text=result.response)
+            else:
+                reply_message = TextMessage(text=result)
         else:
             # 番号以外 → ボタンを再表示してセッション維持
             reply_message = _build_candidates_message(pending)
@@ -101,6 +117,9 @@ def handle_text_message(event: MessageEvent):
         if isinstance(result, CandidatesResult):
             _pending[user_id] = result
             reply_message = _build_candidates_message(result)
+        elif isinstance(result, AIConversationResult):
+            _ai_session[user_id] = result.messages
+            reply_message = TextMessage(text=result.response)
         else:
             reply_message = TextMessage(text=result)
 
