@@ -8,7 +8,6 @@
 """
 
 import os
-import re
 from dataclasses import dataclass
 from openai import OpenAI
 from dotenv import load_dotenv
@@ -24,10 +23,10 @@ client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 # アプリ起動時に一度だけCSVを読み込む（毎回読むと遅いため）
 ITEMS_TO_CATEGORY, CATEGORY_DEFINITIONS = load_garbage_data()
 
-# プロンプトテンプレートをファイルから読み込む（***が品目名のプレースホルダー）
-_prompt_path = os.path.join(os.path.dirname(__file__), '..', 'Input', 'gomi_bot_prompt.txt')
+# システムプロンプトをファイルから読み込む
+_prompt_path = os.path.join(os.path.dirname(__file__), '..', 'Input', 'gomi_bot_prompt_answer.txt')
 with open(_prompt_path, encoding='utf-8') as f:
-    PROMPT_TEMPLATE = f.read()
+    SYSTEM_PROMPT = f.read()
 
 # 素材を表すキーワード。これらが入力に含まれる場合はCSVをスキップしてOpenAIに委ねる
 @dataclass
@@ -82,57 +81,18 @@ def _format_response(item: str, category: str) -> str:
 
 
 def ask_openai(item: str) -> str:
-    """
-    CSVで見つからなかった品目をOpenAI APIで分類する。
-
-    引数:
-        item: ユーザーが入力した品目名
-
-    戻り値:
-        AIの生の回答テキスト（例: "【分類】燃やせる" または素材確認の質問）
-    """
-    prompt = PROMPT_TEMPLATE.replace('***', item)
-
+    """OpenAI APIにユーザーの品目を問い合わせ、回答をそのまま返す。"""
     response = client.chat.completions.create(
         model='gpt-4o-mini',
         messages=[
-            {'role': 'user', 'content': prompt}
+            {'role': 'system', 'content': SYSTEM_PROMPT},
+            {'role': 'user', 'content': item},
         ],
-        max_tokens=100,
+        max_tokens=300,
         temperature=0,
     )
 
     return response.choices[0].message.content.strip()
-
-
-def _parse_ai_response(item: str, ai_response: str) -> str:
-    """
-    AIの回答を解析してLINE返信メッセージを返す。
-
-    - 【分類】〇〇 が含まれる場合 → 分類名を抽出してルールベースの捨て方を付加
-    - 質問が含まれる場合（素材確認など）→ そのまま返す
-    - それ以外 → フォールバックメッセージ
-    """
-    # 素材確認などの質問が含まれる場合はそのまま返す
-    if '？' in ai_response or '?' in ai_response:
-        return ai_response
-
-    # 【分類】〇〇 を抽出
-    match = re.search(r'【分類】(.+)', ai_response)
-    if match:
-        category = match.group(1).strip()
-        if category == '不明':
-            return (
-                f'「{item}」の分類を判定できませんでした。\n'
-                f'安城市の分別ガイドをご確認いただくか、市役所にお問い合わせください。'
-            )
-        return _format_response(item, category)
-
-    # パース失敗時のフォールバック
-    return (
-        f'「{item}」の分類をAIが判定できませんでした。\n'
-        f'安城市の分別ガイドをご確認いただくか、市役所にお問い合わせください。'
-    )
 
 
 def classify_selection(result: CandidatesResult, choice: int) -> str:
@@ -150,8 +110,7 @@ def classify_selection(result: CandidatesResult, choice: int) -> str:
         item, category = result.candidates[choice - 1]
         return _format_response(item, category)
     if choice == len(result.candidates) + 1:
-        ai_response = ask_openai(result.query)
-        return _parse_ai_response(result.query, ai_response)
+        return ask_openai(result.query)
     return f'1〜{len(result.candidates) + 1}の番号で選んでください。'
 
 
@@ -168,8 +127,7 @@ def classify(item: str) -> str | CandidatesResult:
     """
     # ① 素材キーワードが含まれる場合はCSVをスキップしてOpenAIに委ねる
     if _has_material_keyword(item):
-        ai_response = ask_openai(item)
-        return _parse_ai_response(item, ai_response)
+        return ask_openai(item)
 
     # ② CSV完全一致・高確信度一致
     result = search_item(item, ITEMS_TO_CATEGORY)
@@ -186,8 +144,7 @@ def classify(item: str) -> str | CandidatesResult:
         return _format_response(matched_item, category)
 
     # ④ OpenAI にフォールバック
-    ai_response = ask_openai(item)
-    return _parse_ai_response(item, ai_response)
+    return ask_openai(item)
 
 
 # --- 動作確認用 ---
