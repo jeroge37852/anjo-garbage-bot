@@ -2,10 +2,10 @@
 ゴミ分類を判定するモジュール。
 
 処理の流れ:
-1. 素材キーワードが含まれる場合 → OpenAI APIで分類を推測（CSV検索をスキップ）
-2. PDFで品目を検索 → 見つかれば該当ページ情報を返す
-3. CSV検索で品目が見つかれば → 分類＋ルールベースの捨て方を返す
-4. 見つからなければ → OpenAI APIで分類を推測 → ルールベースの捨て方を付加して返す
+1. CSV完全一致・高確信度一致 → 分類＋ルールベースの捨て方を返す
+2. CSV部分一致候補 → 候補リストを返す（複数の場合）
+3. OpenAI フォールバック → AIで分類を推測して返す
+※ PDF参考情報の付加は main.py 側で行う
 """
 
 import os
@@ -14,7 +14,6 @@ from openai import OpenAI
 from dotenv import load_dotenv
 from app.data_loader import load_garbage_data, search_item, get_candidates
 from app.disposal_rules import DISPOSAL_RULES, get_item_note
-from app.pdf_searcher import search_pdfs
 
 # .envファイルからAPIキーを読み込む
 load_dotenv()
@@ -30,7 +29,6 @@ _prompt_path = os.path.join(os.path.dirname(__file__), '..', 'Input', 'gomi_bot_
 with open(_prompt_path, encoding='utf-8') as f:
     SYSTEM_PROMPT = f.read()
 
-# 素材を表すキーワード。これらが入力に含まれる場合はCSVをスキップしてOpenAIに委ねる
 @dataclass
 class CandidatesResult:
     """CSV検索で複数の候補が見つかった場合の結果。"""
@@ -43,21 +41,6 @@ class CandidatesResult:
             lines.append(f'{i}. {item}（{category}）')
         lines.append(f'{len(self.candidates) + 1}. 上記以外・わからない')
         return '\n'.join(lines)
-
-
-_MATERIAL_KEYWORDS = [
-    '金属', '鉄', 'アルミ', 'ステンレス', '銅', '真鍮',
-    '木', '木製', '木材', '竹', '竹製',
-    'プラスチック', '樹脂', 'ナイロン', 'ポリ',
-    'ガラス', '陶器', '陶磁器', '磁器',
-    '布', '綿', '革', 'レザー', 'ゴム',
-    '紙', '段ボール',
-]
-
-
-def _has_material_keyword(text: str) -> bool:
-    """入力テキストに素材を表すキーワードが含まれるか判定する。"""
-    return any(kw in text for kw in _MATERIAL_KEYWORDS)
 
 
 def _format_response(item: str, category: str) -> str:
@@ -97,13 +80,6 @@ class AIConversationResult:
     messages: list[dict]
 
 
-@dataclass
-class PDFPageResult:
-    """PDF検索で品目が見つかった場合の結果。"""
-    item: str
-    matches: list[tuple[str, int, str]]  # [(pdf_name, page_num, display_name), ...]
-
-
 def _call_openai(messages: list[dict]) -> str:
     """OpenAI APIを呼び出してテキスト回答を返す。"""
     response = client.chat.completions.create(
@@ -129,7 +105,7 @@ def ask_openai(item: str) -> str | AIConversationResult:
     if _is_question(response_text):
         messages.append({'role': 'assistant', 'content': response_text})
         return AIConversationResult(response=response_text, messages=messages)
-    return response_text
+    return response_text + '\n\n※ChatGPTによる回答'
 
 
 def continue_ai_conversation(messages: list[dict], user_reply: str) -> str | AIConversationResult:
@@ -139,7 +115,7 @@ def continue_ai_conversation(messages: list[dict], user_reply: str) -> str | AIC
     if _is_question(response_text):
         messages.append({'role': 'assistant', 'content': response_text})
         return AIConversationResult(response=response_text, messages=messages)
-    return response_text
+    return response_text + '\n\n※ChatGPTによる回答'
 
 
 def classify_selection(result: CandidatesResult, choice: int) -> str | AIConversationResult:
@@ -161,7 +137,7 @@ def classify_selection(result: CandidatesResult, choice: int) -> str | AIConvers
     return f'1〜{len(result.candidates) + 1}の番号で選んでください。'
 
 
-def classify(item: str) -> str | CandidatesResult | AIConversationResult | PDFPageResult:
+def classify(item: str) -> str | CandidatesResult | AIConversationResult:
     """
     品目名を受け取り、分類結果のメッセージまたは候補リストを返す。
 
@@ -171,24 +147,16 @@ def classify(item: str) -> str | CandidatesResult | AIConversationResult | PDFPa
     戻り値:
         str: 分類が確定した場合のLINE返信メッセージ
         CandidatesResult: 候補が複数ある場合（main.pyでセッション管理）
-        PDFPageResult: PDFで品目が見つかった場合（main.pyで画像送信）
+        AIConversationResult: OpenAIが質問を返してきた場合（main.pyで会話管理）
+    ※ PDF参考情報の付加は main.py 側で行う
     """
-    # ① 素材キーワードが含まれる場合はCSVをスキップしてOpenAIに委ねる
-    if _has_material_keyword(item):
-        return ask_openai(item)
-
-    # ② PDF検索（CSVより先に確認）
-    pdf_matches = search_pdfs(item)
-    if pdf_matches:
-        return PDFPageResult(item=item, matches=pdf_matches)
-
-    # ③ CSV完全一致・高確信度一致
+    # ① CSV完全一致・高確信度一致
     result = search_item(item, ITEMS_TO_CATEGORY)
     if result:
         category, matched_item = result
         return _format_response(matched_item, category)
 
-    # ④ 部分一致候補を収集
+    # ② 部分一致候補を収集
     candidates = get_candidates(item, ITEMS_TO_CATEGORY)
     if len(candidates) >= 2:
         return CandidatesResult(query=item, candidates=candidates)
@@ -196,7 +164,7 @@ def classify(item: str) -> str | CandidatesResult | AIConversationResult | PDFPa
         matched_item, category = candidates[0]
         return _format_response(matched_item, category)
 
-    # ⑤ OpenAI にフォールバック
+    # ③ OpenAI にフォールバック
     return ask_openai(item)
 
 

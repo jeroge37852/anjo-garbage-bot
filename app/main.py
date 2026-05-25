@@ -24,8 +24,8 @@ from linebot.v3.messaging import (
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
 from dotenv import load_dotenv
 
-from app.classifier import classify, classify_selection, continue_ai_conversation, CandidatesResult, AIConversationResult, PDFPageResult
-from app.pdf_searcher import render_page_png
+from app.classifier import classify, classify_selection, continue_ai_conversation, CandidatesResult, AIConversationResult
+from app.pdf_searcher import render_page_png, search_pdfs
 
 # .env を読み込む
 load_dotenv()
@@ -42,8 +42,22 @@ configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
 
 # ユーザーごとの候補選択セッション（再起動でリセットされる）
 _pending: dict[str, CandidatesResult] = {}
-# ユーザーごとのOpenAI会話履歴（AIが質問を返した場合に保持）
-_ai_session: dict[str, list[dict]] = {}
+# ユーザーごとのOpenAI会話履歴（AIが質問を返した場合に保持）: (元の品目名, メッセージ履歴)
+_ai_session: dict[str, tuple[str, list[dict]]] = {}
+
+
+def _pdf_reference_messages(item: str) -> list:
+    """品目のPDF参考情報メッセージを組み立てる。ヒットしない場合は空リストを返す。"""
+    pdf_matches = search_pdfs(item)
+    messages = []
+    for pdf_name, page_num, display_name in pdf_matches:
+        messages.append(
+            TextMessage(text=f'【参考】「{item}」が {display_name} の {page_num} ページに記載されています。')
+        )
+        if BASE_URL:
+            url = f'{BASE_URL}/pdf-page/{pdf_name}/{page_num}'
+            messages.append(ImageMessage(original_content_url=url, preview_image_url=url))
+    return messages
 
 
 def _build_candidates_message(result: CandidatesResult) -> TextMessage:
@@ -106,24 +120,30 @@ def handle_text_message(event: MessageEvent):
 
     if user_id in _ai_session:
         # OpenAIとの会話が進行中 → 続きを取得
-        messages = _ai_session.pop(user_id)
+        original_item, messages = _ai_session.pop(user_id)
         result = continue_ai_conversation(messages, user_text)
         if isinstance(result, AIConversationResult):
-            _ai_session[user_id] = result.messages
+            _ai_session[user_id] = (original_item, result.messages)
             reply_messages = [TextMessage(text=result.response)]
         else:
-            reply_messages = [TextMessage(text=result)]
+            reply_messages = [TextMessage(text=result)] + _pdf_reference_messages(original_item)
     elif user_id in _pending:
         pending = _pending[user_id]
         if user_text.isdigit() and 1 <= int(user_text) <= len(pending.candidates) + 1:
             # 有効な番号 → 選択を処理してセッション終了
+            idx = int(user_text)
             _pending.pop(user_id)
-            result = classify_selection(pending, int(user_text))
+            result = classify_selection(pending, idx)
             if isinstance(result, AIConversationResult):
-                _ai_session[user_id] = result.messages
+                _ai_session[user_id] = (pending.query, result.messages)
                 reply_messages = [TextMessage(text=result.response)]
             else:
-                reply_messages = [TextMessage(text=result)]
+                # PDF検索は選択された品目名（または元クエリ）で行う
+                if 1 <= idx <= len(pending.candidates):
+                    search_term = pending.candidates[idx - 1][0]
+                else:
+                    search_term = pending.query
+                reply_messages = [TextMessage(text=result)] + _pdf_reference_messages(search_term)
         else:
             # 番号以外 → ボタンを再表示してセッション維持
             reply_messages = [_build_candidates_message(pending)]
@@ -133,18 +153,13 @@ def handle_text_message(event: MessageEvent):
             _pending[user_id] = result
             reply_messages = [_build_candidates_message(result)]
         elif isinstance(result, AIConversationResult):
-            _ai_session[user_id] = result.messages
+            _ai_session[user_id] = (user_text, result.messages)
             reply_messages = [TextMessage(text=result.response)]
-        elif isinstance(result, PDFPageResult):
-            for pdf_name, page_num, display_name in result.matches:
-                reply_messages.append(
-                    TextMessage(text=f'「{result.item}」が {display_name} の {page_num} ページに記載されています。')
-                )
-                if BASE_URL:
-                    url = f'{BASE_URL}/pdf-page/{pdf_name}/{page_num}'
-                    reply_messages.append(ImageMessage(original_content_url=url, preview_image_url=url))
         else:
-            reply_messages = [TextMessage(text=result)]
+            reply_messages = [TextMessage(text=result)] + _pdf_reference_messages(user_text)
+
+    # LINE は1回のReplyで最大5件まで
+    reply_messages = reply_messages[:5]
 
     # LINE に返信
     with ApiClient(configuration) as api_client:
