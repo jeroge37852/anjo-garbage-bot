@@ -12,7 +12,7 @@ import os
 from dataclasses import dataclass
 from openai import OpenAI
 from dotenv import load_dotenv
-from app.data_loader import load_garbage_data, search_item, get_candidates
+from app.data_loader import load_garbage_data, search_item, get_candidates, get_loose_candidates
 from app.disposal_rules import DISPOSAL_RULES, get_item_note
 
 # .envファイルからAPIキーを読み込む
@@ -87,10 +87,23 @@ def _is_question(text: str) -> bool:
     return '？' in text or '?' in text
 
 
-def ask_openai(item: str) -> str | AIConversationResult:
+def _build_csv_context(related_items: list[tuple[str, str]]) -> str:
+    """OpenAIに渡すCSVコンテキストを組み立てる。"""
+    lines = ['【安城市の分類カテゴリと捨て方】']
+    for cat, rule in DISPOSAL_RULES.items():
+        lines.append(f'- {cat}: {rule["捨て方"]}')
+    if related_items:
+        lines.append('\n【CSVに登録されている類似品目（参考）】')
+        for ri_item, ri_cat in related_items:
+            lines.append(f'- {ri_item} → {ri_cat}')
+    return '\n'.join(lines)
+
+
+def ask_openai(item: str, related_items: list[tuple[str, str]] | None = None) -> str | AIConversationResult:
     """OpenAI APIに品目を問い合わせる。質問が返ってきた場合はAIConversationResultを返す。"""
+    context = _build_csv_context(related_items or [])
     messages = [
-        {'role': 'system', 'content': SYSTEM_PROMPT},
+        {'role': 'system', 'content': SYSTEM_PROMPT + '\n\n' + context},
         {'role': 'user', 'content': item},
     ]
     response_text = _call_openai(messages)
@@ -125,7 +138,8 @@ def classify_selection(result: CandidatesResult, choice: int) -> str | AIConvers
         item, category = result.candidates[choice - 1]
         return _format_response(item, category)
     if choice == len(result.candidates) + 1:
-        return ask_openai(result.query)
+        loose = get_loose_candidates(result.query, ITEMS_TO_CATEGORY)
+        return ask_openai(result.query, loose)
     return f'1〜{len(result.candidates) + 1}の番号で選んでください。'
 
 
@@ -156,8 +170,9 @@ def classify(item: str) -> str | CandidatesResult | AIConversationResult:
         matched_item, category = candidates[0]
         return _format_response(matched_item, category)
 
-    # ③ OpenAI にフォールバック
-    return ask_openai(item)
+    # ③ OpenAI にフォールバック（関連品目をコンテキストとして渡す）
+    loose = get_loose_candidates(item, ITEMS_TO_CATEGORY)
+    return ask_openai(item, loose)
 
 
 # --- 動作確認用 ---
