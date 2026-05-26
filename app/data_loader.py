@@ -189,7 +189,7 @@ def get_candidates(query: str, items_to_category: dict, max_results: int = 5) ->
             score = len(nq) / len(ni)
         elif nq in ni:
             ratio = len(nq) / len(ni)
-            if ratio >= 0.3:
+            if len(nq) >= 3:
                 score = ratio
         elif ni in nq:
             score = len(ni) / len(nq) * 0.8  # 逆方向は若干低スコア

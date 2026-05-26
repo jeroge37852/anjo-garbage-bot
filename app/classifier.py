@@ -62,14 +62,6 @@ def _format_response(item: str, category: str) -> str:
     if item_note:
         msg += f'\n【この品目の注意】{item_note}'
 
-    # OpenAI の生回答を追記
-    messages = [
-        {'role': 'system', 'content': SYSTEM_PROMPT},
-        {'role': 'user', 'content': item},
-    ]
-    ai_raw = _call_openai(messages)
-    msg += f'\n\n---\n【OpenAI 生回答】\n{ai_raw}'
-
     return msg
 
 

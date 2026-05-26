@@ -59,10 +59,17 @@ def search_pdfs(item: str) -> list[tuple[str, int, str]]:
     return results
 
 
-def render_page_png(pdf_name: str, page_num: int) -> bytes:
-    """指定PDFの指定ページをPNG画像（バイト列）として返す。"""
+def render_page_png(pdf_name: str, page_num: int, item: str = '') -> bytes:
+    """指定PDFの指定ページをPNG画像（バイト列）として返す。itemを指定するとその箇所をハイライトする。"""
     path = _PDFS[pdf_name]['path']
     doc = fitz.open(path)
     page = doc[page_num - 1]  # fitz は 0-indexed
+
+    if item:
+        rects = page.search_for(item)
+        for rect in rects:
+            annot = page.add_highlight_annot(rect)
+            annot.update()
+
     pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))  # 2x zoom で高解像度
     return pix.tobytes('png')

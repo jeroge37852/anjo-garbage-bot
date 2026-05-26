@@ -7,6 +7,7 @@ LINE Bot Webhook サーバー（Flask）
 """
 
 import os
+from urllib.parse import quote
 from flask import Flask, request, abort
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
@@ -55,7 +56,7 @@ def _pdf_reference_messages(item: str) -> list:
             TextMessage(text=f'【参考】「{item}」が {display_name} の {page_num} ページに記載されています。')
         )
         if BASE_URL:
-            url = f'{BASE_URL}/pdf-page/{pdf_name}/{page_num}'
+            url = f'{BASE_URL}/pdf-page/{pdf_name}/{page_num}?item={quote(item)}'
             messages.append(ImageMessage(original_content_url=url, preview_image_url=url))
     return messages
 
@@ -84,8 +85,9 @@ def health_check():
 @app.route('/pdf-page/<pdf_name>/<int:page_num>', methods=['GET'])
 def serve_pdf_page(pdf_name: str, page_num: int):
     """PDFの指定ページをPNG画像として返す（LINEの ImageMessage 用）"""
+    item = request.args.get('item', '')
     try:
-        png_bytes = render_page_png(pdf_name, page_num)
+        png_bytes = render_page_png(pdf_name, page_num, item)
         return png_bytes, 200, {'Content-Type': 'image/png'}
     except Exception:
         abort(404)
