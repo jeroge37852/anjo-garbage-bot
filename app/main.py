@@ -120,6 +120,8 @@ def handle_text_message(event: MessageEvent):
 
     reply_messages = []
 
+    _OPENAI_MARKER = '※ChatGPTによる回答'
+
     if user_id in _ai_session:
         # OpenAIとの会話が進行中 → 続きを取得
         original_item, messages = _ai_session.pop(user_id)
@@ -145,7 +147,13 @@ def handle_text_message(event: MessageEvent):
                     search_term = pending.candidates[idx - 1][0]
                 else:
                     search_term = pending.query
-                reply_messages = [TextMessage(text=result)] + _pdf_reference_messages(search_term)
+                if _OPENAI_MARKER in result:
+                    reply_messages = [
+                        TextMessage(text='一致するものがありません。ChatGPTに問い合わせます。'),
+                        TextMessage(text=result),
+                    ] + _pdf_reference_messages(search_term)
+                else:
+                    reply_messages = [TextMessage(text=result)] + _pdf_reference_messages(search_term)
         else:
             # 番号以外 → ボタンを再表示してセッション維持
             reply_messages = [_build_candidates_message(pending)]
@@ -158,7 +166,13 @@ def handle_text_message(event: MessageEvent):
             _ai_session[user_id] = (user_text, result.messages)
             reply_messages = [TextMessage(text=result.response)]
         else:
-            reply_messages = [TextMessage(text=result)] + _pdf_reference_messages(user_text)
+            if _OPENAI_MARKER in result:
+                reply_messages = [
+                    TextMessage(text='一致するものがありません。ChatGPTに問い合わせます。'),
+                    TextMessage(text=result),
+                ] + _pdf_reference_messages(user_text)
+            else:
+                reply_messages = [TextMessage(text=result)] + _pdf_reference_messages(user_text)
 
     # LINE は1回のReplyで最大5件まで
     reply_messages = reply_messages[:5]
