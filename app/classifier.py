@@ -162,17 +162,18 @@ def classify(item: str) -> str | CandidatesResult | AIConversationResult:
         category, matched_item = result
         return _format_response(matched_item, category)
 
-    # ② 部分一致候補を収集
+    # ② 部分一致候補を収集（通常閾値）
     candidates = get_candidates(item, ITEMS_TO_CATEGORY)
-    if len(candidates) >= 2:
+    if candidates:
         return CandidatesResult(query=item, candidates=candidates)
-    if len(candidates) == 1:
-        matched_item, category = candidates[0]
-        return _format_response(matched_item, category)
 
-    # ③ OpenAI にフォールバック（関連品目をコンテキストとして渡す）
+    # ③ 緩い一致で候補を収集
     loose = get_loose_candidates(item, ITEMS_TO_CATEGORY)
-    return ask_openai(item, loose)
+    if loose:
+        return CandidatesResult(query=item, candidates=loose)
+
+    # ④ 候補が全くない場合のみOpenAIにフォールバック
+    return ask_openai(item)
 
 
 # --- 動作確認用 ---

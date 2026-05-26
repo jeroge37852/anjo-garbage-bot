@@ -71,7 +71,7 @@ def _build_candidates_message(result: CandidatesResult) -> TextMessage:
     items.append(QuickReplyItem(action=MessageAction(label='その他・わからない', text=str(last))))
 
     return TextMessage(
-        text=f'「{result.query}」に近い品目が複数あります。当てはまるものを選んでください：',
+        text=f'「{result.query}」に近い品目が見つかりました。当てはまるものを選んでください：',
         quick_reply=QuickReply(items=items),
     )
 
