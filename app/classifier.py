@@ -9,11 +9,13 @@
 """
 
 import os
+import base64
 from dataclasses import dataclass
 from openai import OpenAI
 from dotenv import load_dotenv
 from app.data_loader import load_garbage_data, search_item, get_candidates, get_loose_candidates
 from app.disposal_rules import DISPOSAL_RULES, get_item_note
+from app.pdf_searcher import search_pdfs, render_page_png
 
 # .envファイルからAPIキーを読み込む
 load_dotenv()
@@ -99,12 +101,33 @@ def _build_csv_context(related_items: list[tuple[str, str]]) -> str:
     return '\n'.join(lines)
 
 
+def _build_user_content(item: str) -> list[dict] | str:
+    """ユーザーメッセージを組み立てる。PDFにヒットがあれば画像も含める。"""
+    pdf_matches = search_pdfs(item)
+    if not pdf_matches:
+        return item
+
+    content: list[dict] = [{'type': 'text', 'text': item}]
+    for pdf_name, page_num, display_name in pdf_matches:
+        try:
+            png_bytes = render_page_png(pdf_name, page_num, item)
+            b64 = base64.b64encode(png_bytes).decode('utf-8')
+            content.append({
+                'type': 'image_url',
+                'image_url': {'url': f'data:image/png;base64,{b64}', 'detail': 'high'},
+            })
+        except Exception:
+            pass
+
+    return content if len(content) > 1 else item
+
+
 def ask_openai(item: str, related_items: list[tuple[str, str]] | None = None) -> str | AIConversationResult:
     """OpenAI APIに品目を問い合わせる。質問が返ってきた場合はAIConversationResultを返す。"""
     context = _build_csv_context(related_items or [])
     messages = [
         {'role': 'system', 'content': SYSTEM_PROMPT + '\n\n' + context},
-        {'role': 'user', 'content': item},
+        {'role': 'user', 'content': _build_user_content(item)},
     ]
     response_text = _call_openai(messages)
     if _is_question(response_text):
