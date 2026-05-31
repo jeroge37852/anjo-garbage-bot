@@ -76,6 +76,23 @@ def load_garbage_data():
     return items_to_category, category_definitions
 
 
+def get_exact_match(query: str, items_to_category: dict) -> tuple[str, str] | None:
+    """
+    完全一致のみ照合する（正規化後の完全一致を含む）。
+
+    戻り値:
+        見つかった場合: (分類名, 品目名)
+        見つからない場合: None
+    """
+    if query in items_to_category:
+        return items_to_category[query], query
+    nq = _normalize(query)
+    for item, category in items_to_category.items():
+        if _normalize(item) == nq:
+            return category, item
+    return None
+
+
 def search_item(query: str, items_to_category: dict) -> tuple[str, str] | None:
     """
     ユーザーが入力した文字列をCSVの品目と照合する。

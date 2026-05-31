@@ -13,7 +13,7 @@ import base64
 from dataclasses import dataclass
 from openai import OpenAI
 from dotenv import load_dotenv
-from app.data_loader import load_garbage_data, search_item, get_candidates, get_loose_candidates
+from app.data_loader import load_garbage_data, get_exact_match, search_item, get_candidates, get_loose_candidates
 from app.disposal_rules import DISPOSAL_RULES, get_item_note
 from app.pdf_searcher import search_pdfs, render_page_png
 
@@ -107,7 +107,12 @@ def _build_user_content(item: str) -> list[dict] | str:
     if not pdf_matches:
         return item
 
-    content: list[dict] = [{'type': 'text', 'text': item}]
+    prompt_text = (
+        f'「{item}」の捨て方を教えてください。\n'
+        '以下は安城市の公式PDF（分け方・出し方ガイド）のページ画像です。'
+        '画像に該当する情報が記載されている場合は、その内容を優先して分類・回答してください。'
+    )
+    content: list[dict] = [{'type': 'text', 'text': prompt_text}]
     for pdf_name, page_num, display_name in pdf_matches:
         try:
             png_bytes = render_page_png(pdf_name, page_num, item)
@@ -174,23 +179,37 @@ def classify(item: str) -> str | CandidatesResult | AIConversationResult:
         item: ユーザーが入力した品目名（例: "ペットボトル"）
 
     戻り値:
-        str: 分類が確定した場合のLINE返信メッセージ
-        CandidatesResult: 候補が複数ある場合（main.pyでセッション管理）
+        str: 完全一致で分類が確定した場合のLINE返信メッセージ
+        CandidatesResult: 候補がある場合（main.pyでセッション管理）
         AIConversationResult: OpenAIが質問を返してきた場合（main.pyで会話管理）
     ※ PDF参考情報の付加は main.py 側で行う
     """
-    # ① CSV完全一致・高確信度一致
-    result = search_item(item, ITEMS_TO_CATEGORY)
-    if result:
-        category, matched_item = result
+    # ① 完全一致のみ自動確定
+    exact = get_exact_match(item, ITEMS_TO_CATEGORY)
+    if exact:
+        category, matched_item = exact
         return _format_response(matched_item, category)
 
-    # ② 部分一致候補を収集（通常閾値）
-    candidates = get_candidates(item, ITEMS_TO_CATEGORY)
+    # ② 高確信度一致・部分一致・緩い一致をすべて候補リストにまとめる
+    candidates: list[tuple[str, str]] = []
+
+    # search_item の高確信度一致を先頭候補として追加
+    high = search_item(item, ITEMS_TO_CATEGORY)
+    if high:
+        category, matched_item = high
+        candidates.append((matched_item, category))
+
+    # 部分一致候補を追加（重複除去）
+    seen_items = {c[0] for c in candidates}
+    for c in get_candidates(item, ITEMS_TO_CATEGORY):
+        if c[0] not in seen_items:
+            candidates.append(c)
+            seen_items.add(c[0])
+
     if candidates:
         return CandidatesResult(query=item, candidates=candidates)
 
-    # ③ 緩い一致で候補を収集
+    # ③ 緩い一致候補
     loose = get_loose_candidates(item, ITEMS_TO_CATEGORY)
     if loose:
         return CandidatesResult(query=item, candidates=loose)
