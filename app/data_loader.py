@@ -190,7 +190,7 @@ def get_candidates(query: str, items_to_category: dict, max_results: int = 5) ->
     部分一致する候補を複数返す。search_item で確信度の高い一致がなかった場合に使う。
 
     戻り値:
-        [(品目名, 分類名), ...] のリスト（カテゴリ重複なし、スコア順）
+        [(品目名, 分類名), ...] のリスト（スコア順、上位 max_results 件）
     """
     nq = _normalize(query)
     scored: list[tuple[float, str, str]] = []
@@ -199,14 +199,14 @@ def get_candidates(query: str, items_to_category: dict, max_results: int = 5) ->
     for item, category in items_to_category.items():
         ni = _normalize(item)
         if ni == nq:
-            continue  # 完全一致は search_item 側で処理済み
+            continue  # 完全一致は get_exact_match 側で処理済み
 
         score: float | None = None
         if ni.endswith(nq):
             score = len(nq) / len(ni)
         elif nq in ni:
             ratio = len(nq) / len(ni)
-            if len(nq) >= 3:
+            if len(nq) >= 2:
                 score = ratio
         elif ni in nq:
             score = len(ni) / len(nq) * 0.8  # 逆方向は若干低スコア
@@ -218,18 +218,7 @@ def get_candidates(query: str, items_to_category: dict, max_results: int = 5) ->
                 scored.append((score, item, category))
 
     scored.sort(key=lambda x: -x[0])
-
-    # カテゴリ重複を除去し、カテゴリごとに最高スコアの品目だけ残す
-    seen_cats: set[str] = set()
-    result: list[tuple[str, str]] = []
-    for _, item, category in scored:
-        if category not in seen_cats:
-            seen_cats.add(category)
-            result.append((item, category))
-            if len(result) >= max_results:
-                break
-
-    return result
+    return [(item, category) for _, item, category in scored[:max_results]]
 
 
 def get_loose_candidates(query: str, items_to_category: dict, max_results: int = 5) -> list[tuple[str, str]]:
