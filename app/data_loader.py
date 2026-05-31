@@ -185,6 +185,13 @@ def search_item(query: str, items_to_category: dict) -> tuple[str, str] | None:
     return None  # 見つからなかった
 
 
+def _tokenize(text: str) -> list[str]:
+    """助詞で区切って意味のある部分文字列を返す。"""
+    for p in ['の', 'を', 'が', 'は', 'に', 'で', 'と', 'や', 'も', 'へ']:
+        text = text.replace(p, ' ')
+    return [t for t in text.split() if t]
+
+
 def get_candidates(query: str, items_to_category: dict, max_results: int = 5) -> list[tuple[str, str]]:
     """
     部分一致する候補を複数返す。search_item で確信度の高い一致がなかった場合に使う。
@@ -210,6 +217,19 @@ def get_candidates(query: str, items_to_category: dict, max_results: int = 5) ->
                 score = ratio
         elif ni in nq:
             score = len(ni) / len(nq) * 0.8  # 逆方向は若干低スコア
+
+        # 助詞で分割したトークンでも照合（例: "お菓子の箱" → "箱" → "紙箱"）
+        if score is None:
+            for token in _tokenize(nq):
+                if token == nq:
+                    continue
+                ts: float | None = None
+                if ni.endswith(token):
+                    ts = len(token) / len(ni) * 0.7
+                elif token in ni:
+                    ts = len(token) / len(ni) * 0.7
+                if ts is not None and (score is None or ts > score):
+                    score = ts
 
         if score is not None:
             key = (item, category)
